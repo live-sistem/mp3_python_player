@@ -1,10 +1,12 @@
 import sys
 import os
 import pygame
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QFileDialog, QSlider, QLabel, QPushButton, QComboBox
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QFileDialog, QSlider, QLabel, QPushButton, QComboBox, QCheckBox
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
 from datetime import datetime
+import json
+from mutagen.mp3 import MP3
 
 # Инициализация pygame для работы с аудио
 pygame.mixer.init()
@@ -14,20 +16,23 @@ class MP3Player(QWidget):
         super().__init__()
 
         self.setWindowTitle("MP3 Player with Spectrum")
-        self.setGeometry(300, 300, 400, 200)
-
+        self.setGeometry(300, 300, 600, 200)
         # Инициализация переменных
         self.is_playing = False
         self.current_song = None
         self.song_list = []  # Список MP3 файлов
         self.song_info = {}  # Словарь с информацией о файле (для сортировки)
         self.folder_path = 'C:\\Users\\PC2\\Music'
+        self.sort_choice = "По имени" # Переменная для хранения текущего выбора сортировки
+        self.reverse_sorted  = False
+        self.load_preferences()  # Загружаем выбранную сортировку из файла
+        
         # Создание интерфейса
         self.init_ui()
 
     def init_ui(self):
         main_layout = QHBoxLayout()
-         # Горизонтальный layout для кнопки выбора файла
+        
         # Создание разделителя (QSplitter) для разделения окна на две части
         splitter = QSplitter(Qt.Horizontal)
 
@@ -43,12 +48,24 @@ class MP3Player(QWidget):
         self.sort_by_combo.addItem("По имени")
         self.sort_by_combo.addItem("По дате")
         self.sort_by_combo.addItem("По длительности")
+        self.sort_by_combo.setCurrentText(self.sort_choice)  # Восстанавливаем выбранную сортировку
         self.sort_by_combo.currentIndexChanged.connect(self.sort_files)
         sort_layout.addWidget(self.sort_by_combo)
+        
+        # Кнопка для пересортировки
+        self.sort_reverse_button = QPushButton("Реверс")
+        self.sort_reverse_button.clicked.connect(self.reverse_sort)
+        sort_layout.addWidget(self.sort_reverse_button)
+
+        # Добавляем QCheckBox для отслеживания состояния переворота списка
+        self.reverse_checkbox = QCheckBox("Перевернуть список")
+        self.reverse_checkbox.setChecked(self.reverse_sorted)  # Восстанавливаем состояние переворота
+        self.reverse_checkbox.stateChanged.connect(self.update_reverse_sorted)
+        sort_layout.addWidget(self.reverse_checkbox)
 
         # Правый контейнер с элементами управления
         right_layout = QVBoxLayout()
-        
+
         # Кнопки для воспроизведения/паузы (внизу по центру)
         self.play_button = QPushButton()
         self.play_button.setIcon(QIcon(r'src\icon\play_icon.png'))  # Убедитесь, что иконки существуют
@@ -69,9 +86,13 @@ class MP3Player(QWidget):
         self.volume_slider.valueChanged.connect(self.set_volume)
         
         # Добавляем элементы управления в правую часть
+        right_layout.addWidget(self.sort_by_combo)
+        right_layout.addWidget(self.sort_reverse_button)
         right_layout.addWidget(self.play_button)
         right_layout.addWidget(self.volume_label)
         right_layout.addWidget(self.volume_slider)
+        
+        
 
         sort_layout.addWidget(self.file_list_widget)
         splitter.addWidget(self.file_list_widget)
@@ -84,7 +105,29 @@ class MP3Player(QWidget):
 
         main_layout.addWidget(splitter)
         self.setLayout(main_layout)
-    
+
+    def load_preferences(self):
+        """Загружает настройки (сортировка и перевернутый список) из файла."""
+        try:
+            with open('preferences.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.sort_choice = data.get('sort_choice', self.sort_choice)
+                self.reverse_sorted = data.get('reverse_sorted', self.reverse_sorted)
+                print(self.sort_choice, self.reverse_sorted)
+        except FileNotFoundError:
+            # Если файл не найден, устанавливаем значения по умолчанию
+            self.sort_choice = 'По имени'
+            self.reverse_sorted = False
+
+    def save_preferences(self):
+        """Сохраняет настройки (сортировка и перевернутый список) в файл."""
+        with open('preferences.json', 'w', encoding='utf-8') as f:
+            json.dump({
+                'sort_choice': self.sort_choice,
+                'reverse_sorted': self.reverse_sorted
+            }, f)
+
+ 
     def load_mp3_files(self):
         """Загружает все MP3 файлы из папки."""
           # Укажите путь к папке с MP3 файлами
@@ -94,7 +137,7 @@ class MP3Player(QWidget):
         
         # Получаем список файлов в папке
         for file_name in os.listdir(self.folder_path):
-            if file_name.endswith(".mp3"):
+            if file_name.endswith(".mp3") or file_name.endswith(".MP3"):
                 file_path = os.path.join(self.folder_path, file_name)
                 file_info = os.stat(file_path)
                 file_date = datetime.fromtimestamp(file_info.st_mtime)
@@ -107,8 +150,8 @@ class MP3Player(QWidget):
     def get_mp3_duration(self, file_path):
         """Возвращает длительность MP3 файла в секундах."""
         try:
-            sound = pygame.mixer.Sound(file_path)
-            return sound.get_length()  # Возвращает длительность в секундах
+            audio = MP3(file_path)
+            return audio.info.length 
         except Exception as e:
             print(f"Не удалось получить длительность файла {file_path}: {e}")
             return 0
@@ -118,21 +161,40 @@ class MP3Player(QWidget):
         """Обновляет отображаемый список файлов."""
         self.file_list_widget.clear()
         for song in self.song_list:
-            item = self.file_list_widget.addItem(song)
-            print(item) 
+            self.file_list_widget.addItem(song)
 
     def sort_files(self):
         """Сортирует файлы по выбранному атрибуту."""
-        sort_by = self.sort_by_combo.currentText()
+        self.sort_choice = self.sort_by_combo.currentText()
+        self.save_preferences()
 
-        if sort_by == "По имени":
+
+        if self.sort_choice == "По имени":
             self.song_list.sort()
-        elif sort_by == "По дате":
+        elif self.sort_choice == "По дате":
+            # Сортировка по дате изменения
             self.song_list.sort(key=lambda song: self.song_info[song]['date'])
-        elif sort_by == "По длительности":
+        elif self.sort_choice == "По длительности":
             self.song_list.sort(key=lambda song: self.song_info[song]['duration'])
 
+        # Если список перевернут, инвертируем его
+        if self.reverse_sorted:
+            self.song_list.reverse()
+
         self.update_file_list()
+
+    def reverse_sort(self):
+        """Пересортировать (реверсировать) файлы по текущему порядку."""
+        self.reverse_sorted = not self.reverse_sorted  # Переключаем состояние переворота
+        self.reverse_checkbox.setChecked(self.reverse_sorted)  # Обновляем состояние флажка
+        self.save_preferences()  # Сохраняем предпочтения
+        self.sort_files()  # Пересортируем список с учетом нового состояния переворота
+
+    def update_reverse_sorted(self):
+        """Обновляет состояние переменной переворота при изменении флажка."""
+        self.reverse_sorted = self.reverse_checkbox.isChecked()
+        self.save_preferences()  # Сохраняем предпочтения
+        self.sort_files()  # Пересортируем список с учетом нового состояния переворота
 
     def on_file_selected(self, item):
         """Обработчик выбора файла из списка."""
